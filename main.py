@@ -45,7 +45,6 @@ logging.basicConfig(
 TOKEN = os.environ.get("BOT_TOKEN")
 
 TASKS_FILE = "tasks.json"
-TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
     "https://echerha.gov.ua/api/v4/workload/1",
