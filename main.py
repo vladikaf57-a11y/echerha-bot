@@ -46,11 +46,11 @@ TOKEN = os.environ.get("BOT_TOKEN")
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
-    "https://echerha.gov.ua/api/v4/workload",
     "https://echerha.gov.ua/api/v4/workload/1",
     "https://echerha.gov.ua/api/v4/workload/2",
     "https://echerha.gov.ua/api/v4/workload/3",
 ]
+
 DAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
 CHECKPOINTS = {
@@ -287,7 +287,6 @@ def fetch_live_echerha_queues():
   scraper = cloudscraper.create_scraper(
       browser={"browser": "chrome", "platform": "windows", "desktop": True}
   )
-  flattened_queues = []
 
   headers = {
       "User-Agent": (
@@ -298,28 +297,19 @@ def fetch_live_echerha_queues():
       "Referer": "https://echerha.gov.ua/workload",
   }
 
+  flattened_queues = []
+
   for base_url in WORKLOAD_API_URLS:
     urls_to_try = [
-        f"https://api.codetabs.com/v1/proxy?quest={base_url}",
-        f"https://api.allorigins.win/raw?url={base_url}",
-        f"https://corsproxy.io/?{base_url}",
-        f"https://thingproxy.freeboard.io/fetch/{base_url}",
         base_url,
+        f"https://api.allorigins.win/raw?url={base_url}",
+        f"https://api.codetabs.com/v1/proxy?quest={base_url}",
     ]
 
     for req_url in urls_to_try:
       try:
-        res = None
-        try:
-          res = scraper.get(
-              req_url, headers=headers, timeout=10, verify=False
-          )
-        except Exception:
-          res = requests.get(
-              req_url, headers=headers, timeout=10, verify=False
-          )
-
-        if res and res.status_code == 200 and res.text.strip():
+        res = scraper.get(req_url, headers=headers, timeout=5)
+        if res.status_code == 200 and res.text.strip():
           text = res.text.strip()
           if text.startswith(("[", "{")):
             parsed_json = json.loads(text)
@@ -453,7 +443,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⏳ *Загружаю текущие данные єЧерга...*", parse_mode="Markdown"
     )
 
-    report_text = fetch_country_queue_report(cntry_code)
+    report_text = await asyncio.to_thread(
+        fetch_country_queue_report, cntry_code
+    )
 
     kb = InlineKeyboardMarkup([
         [
@@ -688,7 +680,7 @@ async def queue_checker_loop(app: Application):
     try:
       tasks = load_tasks()
       if tasks:
-        all_queues = fetch_live_echerha_queues()
+        all_queues = await asyncio.to_thread(fetch_live_echerha_queues)
 
         for chat_id, user_tasks in list(tasks.items()):
           for task in list(user_tasks):
