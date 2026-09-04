@@ -42,9 +42,9 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = os.environ.get(
-    "BOT_TOKEN", "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
-)
+TOKEN = os.environ.get("BOT_TOKEN")
+
+TASKS_FILE = "tasks.json"
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
