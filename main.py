@@ -41,11 +41,8 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = os.environ.get("BOT_TOKEN")
-# Вшитый ключ ScraperAPI для пробития Cloudflare
-SCRAPER_API_KEY = os.environ.get(
-    "SCRAPER_API_KEY", "efd2da31c1fb502728ca866fdd35a3d5"
-)
+TOKEN = "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
+SCRAPER_API_KEY = "efd2da31c1fb502728ca866fdd35a3d5"
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
@@ -658,7 +655,9 @@ def parse_target_datetime(date_str, time_str):
         dt = datetime.strptime(f"{date_str} {time_str}", fmt)
         dt = dt.replace(year=now.year, tzinfo=TZ)
       else:
-        dt = datetime.strptime(f"{date_str} {time_str}", fmt).replace(tzinfo=TZ)
+        dt = datetime.strptime(f"{date_str} {time_str}", fmt).replace(
+            tzinfo=TZ
+        )
       return dt
     except ValueError:
       continue
