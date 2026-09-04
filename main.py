@@ -16,11 +16,11 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# Часовой пояс
+# Установка часового пояса (Польша / Украина)
 TZ = ZoneInfo("Europe/Warsaw")
 
 
-# Микро-сервер для Render.com
+# Микро-сервер для пинга на Render.com
 class HealthCheckHandler(BaseHTTPRequestHandler):
 
   def do_GET(self):
@@ -474,6 +474,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_val = data.split("_")[2]
     user_wizard[chat_id]["date"] = date_val
 
+    # ВЫБОР ВРЕМЕНИ С ШАГОМ 30 МИНУТ (СЕТКА ПО 4 КНОПКИ В РЯД)
     time_options = []
     for h in range(24):
       for m in (0, 30):
