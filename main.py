@@ -40,7 +40,7 @@ def run_health_server():
 
 
 threading.Thread(target=run_health_server, daemon=True).start()
-
+TOKEN = os.environ.get("8982444944:AAFznR-8oCVMkMsMrlFu1FTm7FiEt4KO8Do")
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
