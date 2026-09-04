@@ -46,9 +46,11 @@ TOKEN = os.environ.get("BOT_TOKEN")
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
+    "https://back.echerha.gov.ua/api/v4/workload/1",
+    "https://back.echerha.gov.ua/api/v4/workload/2",
+    "https://back.echerha.gov.ua/api/v4/workload/3",
     "https://echerha.gov.ua/api/v4/workload/1",
     "https://echerha.gov.ua/api/v4/workload/2",
-    "https://echerha.gov.ua/api/v4/workload/3",
 ]
 
 DAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
@@ -230,7 +232,13 @@ def get_estimated_entry_datetime(wait_str):
 
 def parse_queue_items(data_obj):
   flattened = []
-  items = data_obj if isinstance(data_obj, list) else data_obj.get("data", [])
+  items = (
+      data_obj
+      if isinstance(data_obj, list)
+      else (
+          data_obj.get("data", []) if isinstance(data_obj, dict) else [data_obj]
+      )
+  )
   if not isinstance(items, list):
     items = [items]
 
@@ -256,7 +264,7 @@ def parse_queue_items(data_obj):
       for q in queues:
         if isinstance(q, dict):
           q_name = str(q.get("name") or q.get("title") or "").lower()
-          full_name = f"{chk_name} {q_name}"
+          full_name = f"{chk_name} {q_name}".strip()
           w_time = (
               q.get("waiting_time")
               or q.get("wait_time")
@@ -294,7 +302,8 @@ def fetch_live_echerha_queues():
           " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
       ),
       "Accept": "application/json, text/plain, */*",
-      "Referer": "https://echerha.gov.ua/workload",
+      "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+      "Referer": "https://echerha.gov.ua/",
   }
 
   flattened_queues = []
