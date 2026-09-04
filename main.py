@@ -20,7 +20,7 @@ from telegram.ext import (
 TZ = ZoneInfo("Europe/Warsaw")
 
 
-# Микро-сервер для пинга на Render.com
+# Микро-сервер для поддержания активности на Render.com
 class HealthCheckHandler(BaseHTTPRequestHandler):
 
   def do_GET(self):
@@ -41,7 +41,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = "8982444944:AAFznR-8oCVMkMsMrlFu1FTm7FiEt4KO8Do"
+TOKEN = "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
@@ -154,18 +154,40 @@ user_wizard = {}
 
 
 def parse_wait_time_to_datetime(wait_str):
-  if not wait_str or "0 хв" in wait_str or "без черги" in wait_str.lower():
+  if (
+      not wait_str
+      or str(wait_str).lower() in ["none", "null", ""]
+      or "без черги" in str(wait_str).lower()
+  ):
     return "🟢 Без очереди"
+
+  wait_str = str(wait_str).strip()
+
+  if wait_str.isdigit():
+    sec = int(wait_str)
+    if sec == 0:
+      return "🟢 Без очереди"
+    if sec < 1000000:
+      now = datetime.now(TZ)
+      dt = now + timedelta(seconds=sec)
+      dow = DAYS_RU[dt.weekday()]
+      return dt.strftime(f"%d.%m ({dow}) %H:%M")
 
   now = datetime.now(TZ)
   days, hours, minutes = 0, 0, 0
 
-  d_m = re.search(r"(\d+)\s*(?:дн|доб|день|дня|днів|дні)", wait_str, re.I)
+  d_m = re.search(
+      r"(\d+)\s*(?:дн|доб|день|дня|днів|дні|day|days)", wait_str, re.I
+  )
   h_m = re.search(
-      r"(\d+)\s*(?:год|годин|години|годину|час|часа|часов)", wait_str, re.I
+      r"(\d+)\s*(?:год|годин|години|годину|час|часа|часов|hour|hours)",
+      wait_str,
+      re.I,
   )
   m_m = re.search(
-      r"(\d+)\s*(?:хв|хвилин|хвилини|хвилину|мин|минут)", wait_str, re.I
+      r"(\d+)\s*(?:хв|хвилин|хвилини|хвилину|мин|минут|min|minutes)",
+      wait_str,
+      re.I,
   )
 
   if d_m:
@@ -176,33 +198,86 @@ def parse_wait_time_to_datetime(wait_str):
     minutes = int(m_m.group(1))
 
   if days == 0 and hours == 0 and minutes == 0:
-    return "🟢 Без очереди"
+    if "0 хв" in wait_str or "0 min" in wait_str or wait_str == "0":
+      return "🟢 Без очереди"
+    return f"⏱ {wait_str}"
 
   dt = now + timedelta(days=days, hours=hours, minutes=minutes)
   dow = DAYS_RU[dt.weekday()]
   return dt.strftime(f"%d.%m ({dow}) %H:%M")
 
 
-def fetch_live_echerha_data():
+def fetch_live_echerha_queues():
   headers = {
       "User-Agent": (
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+          " (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
       ),
       "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "uk-UA,uk;q=0.9,en;q=0.8",
+      "x-client-locale": "uk",
   }
-  raw_data = []
+  flattened_queues = []
+
   for url in WORKLOAD_API_URLS:
     try:
-      res = requests.get(url, headers=headers, timeout=8)
+      res = requests.get(url, headers=headers, timeout=10)
       if res.status_code == 200:
         data = res.json()
-        if isinstance(data, list):
-          raw_data.extend(data)
-        elif isinstance(data, dict) and "data" in data:
-          raw_data.extend(data["data"])
+        items = data if isinstance(data, list) else data.get("data", [data])
+        for item in items:
+          if isinstance(item, dict):
+            chk_name = str(
+                item.get("name")
+                or item.get("title")
+                or item.get("checkpoint_name")
+                or ""
+            ).lower()
+            queues = (
+                item.get("queues")
+                or item.get("items")
+                or item.get("checkpoints")
+                or []
+            )
+
+            if isinstance(queues, list) and len(queues) > 0:
+              for q in queues:
+                if isinstance(q, dict):
+                  q_name = str(q.get("name") or q.get("title") or "").lower()
+                  full_name = f"{chk_name} {q_name}"
+                  w_time = (
+                      q.get("waiting_time")
+                      or q.get("wait_time")
+                      or q.get("delay_time")
+                      or q.get("estimated_waiting_time")
+                      or q.get("wait")
+                  )
+                  flattened_queues.append({
+                      "full_name": full_name,
+                      "chk_name": chk_name,
+                      "q_name": q_name,
+                      "waiting_time": (
+                          str(w_time) if w_time is not None else ""
+                      ),
+                  })
+            else:
+              w_time = (
+                  item.get("waiting_time")
+                  or item.get("wait_time")
+                  or item.get("delay_time")
+                  or item.get("estimated_waiting_time")
+                  or item.get("wait")
+              )
+              flattened_queues.append({
+                  "full_name": chk_name,
+                  "chk_name": chk_name,
+                  "q_name": chk_name,
+                  "waiting_time": str(w_time) if w_time is not None else "",
+              })
     except Exception as e:
-      logging.error(f"Ошибка получения API {url}: {e}")
-  return raw_data
+      logging.error(f"Ошибка обращения к API {url}: {e}")
+
+  return flattened_queues
 
 
 def fetch_country_queue_report(country_code):
@@ -211,7 +286,7 @@ def fetch_country_queue_report(country_code):
   flag = country_info.get("flag", "📍")
   items = country_info.get("items", [])
 
-  api_data = fetch_live_echerha_data()
+  all_queues = fetch_live_echerha_queues()
   output_lines = [
       f"📊 **Ориентировочное время въезда (последняя машина): {flag}"
       f" {country_name}**\n"
@@ -219,34 +294,33 @@ def fetch_country_queue_report(country_code):
 
   for item_title, keywords, special_type in items:
     found_wait_time = None
-    for entry in api_data:
-      name = str(
-          entry.get("name", "")
-          or entry.get("title", "")
-          or entry.get("checkpoint_name", "")
-      ).lower()
-      wait_time = str(
-          entry.get("waiting_time", "")
-          or entry.get("wait_time", "")
-          or entry.get("delay_time", "")
-      )
+    for entry in all_queues:
+      full_name = entry["full_name"]
+      wait_time = entry["waiting_time"]
 
-      if any(k in name for k in keywords):
-        if special_type is True and ("1-24" in name or "уктзед" in name):
+      if any(k in full_name for k in keywords):
+        if special_type is True and (
+            "1-24" in full_name or "уктзед" in full_name
+        ):
           found_wait_time = wait_time
           break
         elif special_type == "порожн" and (
-            "порожн" in name or "пуст" in name or "empty" in name
+            "порожн" in full_name
+            or "пуст" in full_name
+            or "empty" in full_name
         ):
           found_wait_time = wait_time
           break
         elif special_type is False and not (
-            "1-24" in name or "порожн" in name or "пуст" in name
+            "1-24" in full_name
+            or "порожн" in full_name
+            or "пуст" in full_name
+            or "уктзед" in full_name
         ):
           found_wait_time = wait_time
           break
 
-    if found_wait_time is not None:
+    if found_wait_time is not None and found_wait_time != "":
       formatted_dt = parse_wait_time_to_datetime(found_wait_time)
     else:
       formatted_dt = "⚠️ Нет данных"
@@ -474,7 +548,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_val = data.split("_")[2]
     user_wizard[chat_id]["date"] = date_val
 
-    # ВЫБОР ВРЕМЕНИ С ШАГОМ 30 МИНУТ (СЕТКА ПО 4 КНОПКИ В РЯД)
     time_options = []
     for h in range(24):
       for m in (0, 30):
@@ -533,6 +606,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def parse_target_datetime(date_str, time_str):
+  now = datetime.now(TZ)
+  for fmt in ["%d.%m.%Y %H:%M", "%d.%m %H:%M"]:
+    try:
+      if fmt == "%d.%m %H:%M":
+        dt = datetime.strptime(f"{date_str} {time_str}", fmt)
+        dt = dt.replace(year=now.year, tzinfo=TZ)
+      else:
+        dt = datetime.strptime(f"{date_str} {time_str}", fmt).replace(tzinfo=TZ)
+      return dt
+    except ValueError:
+      continue
+  return None
+
+
 async def queue_checker_loop(app: Application):
   while True:
     try:
@@ -541,13 +629,11 @@ async def queue_checker_loop(app: Application):
         now_dt = datetime.now(TZ)
         for chat_id, user_tasks in list(tasks.items()):
           for task in list(user_tasks):
-            try:
-              target_dt = datetime.strptime(
-                  f"{task['target_date']} {task['target_time']}",
-                  "%d.%m.%Y %H:%M",
-              ).replace(tzinfo=TZ)
-
-              if now_dt >= target_dt:
+            target_dt = parse_target_datetime(
+                task.get("target_date", ""), task.get("target_time", "")
+            )
+            if target_dt and now_dt >= target_dt:
+              try:
                 await app.bot.send_message(
                     chat_id=int(chat_id),
                     text=(
@@ -561,10 +647,10 @@ async def queue_checker_loop(app: Application):
                 )
                 user_tasks.remove(task)
                 save_tasks(tasks)
-            except Exception as task_err:
-              logging.error(f"Ошибка проверки задачи: {task_err}")
+              except Exception as err:
+                logging.error(f"Ошибка отправки уведомления: {err}")
     except Exception as e:
-      logging.error(f"Ошибка фоновой проверки: {e}")
+      logging.error(f"Ошибка проверки задач: {e}")
 
     await asyncio.sleep(30)
 
@@ -578,7 +664,7 @@ def main():
   app.add_handler(CommandHandler("start", start))
   app.add_handler(CallbackQueryHandler(handle_callback))
 
-  print("🚀 Бот запущен с точным расчетом и фоновой проверкой каждые 30 сек.")
+  print("🚀 Бот запущен с полным разбором API и поддержкой любых дат!")
   app.run_polling()
 
 
