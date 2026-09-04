@@ -41,7 +41,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
+TOKEN = "8982444944:AAFznR-8oCVMkMsMrlFu1FTm7FiEt4KO8Do"
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
