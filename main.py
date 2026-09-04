@@ -43,10 +43,10 @@ logging.basicConfig(
 )
 
 TOKEN = os.environ.get("BOT_TOKEN")
-
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
+    "https://echerha.gov.ua/api/v4/workload",
     "https://echerha.gov.ua/api/v4/workload/1",
     "https://echerha.gov.ua/api/v4/workload/2",
     "https://echerha.gov.ua/api/v4/workload/3",
@@ -122,16 +122,28 @@ CHECKPOINTS = {
         "flag": "🇭🇺",
         "name": "Венгрия",
         "items": [
-            ("Чоп (Тиса) — Захонь (≥ 7,5 т)", ["чоп"], False),
-            ("Чоп (Тиса) — Захонь (Пустые ≥ 7,5 т)", ["чоп"], "порожн"),
+            ("Чоп (Тиса) — Захонь (≥ 7,5 т)", ["чоп", "тиса", "захонь"], False),
+            (
+                "Чоп (Тиса) — Захонь (Пустые ≥ 7,5 т)",
+                ["чоп", "тиса", "захонь"],
+                "порожн",
+            ),
         ],
     },
     "SK": {
         "flag": "🇸🇰",
         "name": "Словакия",
         "items": [
-            ("Ужгород — Вышне Немецке (≥ 7,5 т)", ["ужгород"], False),
-            ("Ужгород — Вышне Немецке (Пустые ≥ 7,5 т)", ["ужгород"], "порожн"),
+            (
+                "Ужгород — Вышне Немецке (≥ 7,5 т)",
+                ["ужгород", "вишнє", "вышне"],
+                False,
+            ),
+            (
+                "Ужгород — Вышне Немецке (Пустые ≥ 7,5 т)",
+                ["ужгород", "вишнє", "вышне"],
+                "порожн",
+            ),
         ],
     },
 }
@@ -156,7 +168,6 @@ user_wizard = {}
 
 
 def format_time_diff(target_dt):
-  """Вычисляет и красиво форматирует оставшееся время от с момента СЕЙЧАС (дни и часы)."""
   now = datetime.now(TZ)
   diff = target_dt - now
   if diff.total_seconds() <= 0:
@@ -178,7 +189,6 @@ def format_time_diff(target_dt):
 
 
 def get_estimated_entry_datetime(wait_str):
-  """Рассчитывает дату и время въезда ПОСЛЕДНЕЙ машины в очереди."""
   if (
       not wait_str
       or str(wait_str).lower() in ["none", "null", ""]
@@ -218,81 +228,112 @@ def get_estimated_entry_datetime(wait_str):
   return now + timedelta(days=days, hours=hours, minutes=minutes)
 
 
+def parse_queue_items(data_obj):
+  flattened = []
+  items = data_obj if isinstance(data_obj, list) else data_obj.get("data", [])
+  if not isinstance(items, list):
+    items = [items]
+
+  for item in items:
+    if not isinstance(item, dict):
+      continue
+
+    chk_name = str(
+        item.get("name")
+        or item.get("title")
+        or item.get("checkpoint_name")
+        or ""
+    ).lower()
+    queues = (
+        item.get("queues")
+        or item.get("items")
+        or item.get("checkpoints")
+        or item.get("workloads")
+        or []
+    )
+
+    if isinstance(queues, list) and len(queues) > 0:
+      for q in queues:
+        if isinstance(q, dict):
+          q_name = str(q.get("name") or q.get("title") or "").lower()
+          full_name = f"{chk_name} {q_name}"
+          w_time = (
+              q.get("waiting_time")
+              or q.get("wait_time")
+              or q.get("delay_time")
+              or q.get("estimated_waiting_time")
+              or q.get("wait")
+          )
+          flattened.append({
+              "full_name": full_name,
+              "waiting_time": str(w_time) if w_time is not None else "",
+          })
+    else:
+      w_time = (
+          item.get("waiting_time")
+          or item.get("wait_time")
+          or item.get("delay_time")
+          or item.get("estimated_waiting_time")
+      )
+      flattened.append({
+          "full_name": chk_name,
+          "waiting_time": str(w_time) if w_time is not None else "",
+      })
+
+  return flattened
+
+
 def fetch_live_echerha_queues():
-  """Запрашивает данные єЧерга с обходом защиты Cloudflare на Render."""
   scraper = cloudscraper.create_scraper(
       browser={"browser": "chrome", "platform": "windows", "desktop": True}
   )
   flattened_queues = []
 
+  headers = {
+      "User-Agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+          " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      ),
+      "Accept": "application/json, text/plain, */*",
+      "Referer": "https://echerha.gov.ua/workload",
+  }
+
   for base_url in WORKLOAD_API_URLS:
     urls_to_try = [
-        base_url,
-        f"https://corsproxy.io/?{base_url}",
+        f"https://api.codetabs.com/v1/proxy?quest={base_url}",
         f"https://api.allorigins.win/raw?url={base_url}",
+        f"https://corsproxy.io/?{base_url}",
+        f"https://thingproxy.freeboard.io/fetch/{base_url}",
+        base_url,
     ]
-    data = None
+
     for req_url in urls_to_try:
       try:
-        res = scraper.get(req_url, timeout=12, verify=False)
-        if res.status_code == 200 and res.text.strip().startswith(("[", "{")):
-          data = res.json()
-          break
+        res = None
+        try:
+          res = scraper.get(
+              req_url, headers=headers, timeout=10, verify=False
+          )
+        except Exception:
+          res = requests.get(
+              req_url, headers=headers, timeout=10, verify=False
+          )
+
+        if res and res.status_code == 200 and res.text.strip():
+          text = res.text.strip()
+          if text.startswith(("[", "{")):
+            parsed_json = json.loads(text)
+            extracted = parse_queue_items(parsed_json)
+            if extracted:
+              flattened_queues.extend(extracted)
+              break
       except Exception as e:
         logging.error(f"Ошибка получения {req_url}: {e}")
-
-    if not data:
-      continue
-
-    items = data if isinstance(data, list) else data.get("data", [data])
-    for item in items:
-      if isinstance(item, dict):
-        chk_name = str(
-            item.get("name")
-            or item.get("title")
-            or item.get("checkpoint_name")
-            or ""
-        ).lower()
-        queues = (
-            item.get("queues")
-            or item.get("items")
-            or item.get("checkpoints")
-            or []
-        )
-
-        if isinstance(queues, list) and len(queues) > 0:
-          for q in queues:
-            if isinstance(q, dict):
-              q_name = str(q.get("name") or q.get("title") or "").lower()
-              full_name = f"{chk_name} {q_name}"
-              w_time = (
-                  q.get("waiting_time")
-                  or q.get("wait_time")
-                  or q.get("delay_time")
-                  or q.get("estimated_waiting_time")
-                  or q.get("wait")
-              )
-              flattened_queues.append({
-                  "full_name": full_name,
-                  "waiting_time": str(w_time) if w_time is not None else "",
-              })
-        else:
-          w_time = (
-              item.get("waiting_time")
-              or item.get("wait_time")
-              or item.get("delay_time")
-              or item.get("estimated_waiting_time")
-          )
-          flattened_queues.append({
-              "full_name": chk_name,
-              "waiting_time": str(w_time) if w_time is not None else "",
-          })
 
   return flattened_queues
 
 
 def fetch_country_queue_report(country_code):
-  """Формирует отчёт '📊 Очередь сейчас' с датой въезда и временем от сегодняшнего дня."""
   country_info = CHECKPOINTS.get(country_code, {})
   country_name = country_info.get("name", "Граница")
   flag = country_info.get("flag", "📍")
@@ -340,7 +381,9 @@ def fetch_country_queue_report(country_code):
     else:
       formatted_dt = "⚠️ Нет данных"
 
-    output_lines.append(f"📍 **{item_title}**\n🚚 Последняя машина: {formatted_dt}\n")
+    output_lines.append(
+        f"📍 **{item_title}**\n🚚 Последняя машина: {formatted_dt}\n"
+    )
 
   now = datetime.now(TZ)
   dow = DAYS_RU[now.weekday()]
@@ -356,9 +399,7 @@ def main_keyboard():
           )
       ],
       [
-          InlineKeyboardButton(
-              "📋 Мои задачи", callback_data="show_tasks"
-          ),
+          InlineKeyboardButton("📋 Мои задачи", callback_data="show_tasks"),
           InlineKeyboardButton(
               "📊 Очередь сейчас", callback_data="status_select_country"
           ),
@@ -393,7 +434,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for code, info in CHECKPOINTS.items():
       buttons.append([
           InlineKeyboardButton(
-              f"{info['flag']} {info['name']}", callback_data=f"status_show_{code}"
+              f"{info['flag']} {info['name']}",
+              callback_data=f"status_show_{code}",
           )
       ])
     buttons.append(
@@ -487,7 +529,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for code, info in CHECKPOINTS.items():
       buttons.append([
           InlineKeyboardButton(
-              f"{info['flag']} {info['name']}", callback_data=f"wiz_cntry_{code}"
+              f"{info['flag']} {info['name']}",
+              callback_data=f"wiz_cntry_{code}",
           )
       ])
     buttons.append(
@@ -616,7 +659,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ **Отслеживание установлено!**\n\n"
         f"📍 **Пункт:** {new_task['checkpoint']}\n"
         f"🎯 **Желаемый въезд:** `{new_task['target_date']} в {new_task['target_time']}`\n\n"
-        f"🔔 Бот непрерывно следит за последней машиной и пришлёт уведомление, как только очередь дойдёт до этого времени!",
+        f"🔔 Бот пришлёт уведомление, как только время въезда последней машины в очереди достигнет этой отметки!",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("📋 Мои задачи", callback_data="show_tasks"),
             InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main"),
@@ -641,7 +684,6 @@ def parse_target_datetime(date_str, time_str):
 
 
 async def queue_checker_loop(app: Application):
-  """Проверяет время въезда ПОСЛЕДНЕЙ машины. Если оно >= целевого, слать пуш."""
   while True:
     try:
       tasks = load_tasks()
@@ -722,7 +764,7 @@ def main():
   app.add_handler(CommandHandler("start", start))
   app.add_handler(CallbackQueryHandler(handle_callback))
 
-  print("🚀 Бот запущен с расчетом дней/часов от сегодняшнего дня!")
+  print("🚀 Бот успешно запущен!")
   app.run_polling()
 
 
