@@ -41,7 +41,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
+TOKEN = os.environ.get("BOT_TOKEN")
 SCRAPER_API_KEY = "efd2da31c1fb502728ca866fdd35a3d5"
 TASKS_FILE = "tasks.json"
 
@@ -745,7 +745,7 @@ def main():
   app.add_handler(CommandHandler("start", start))
   app.add_handler(CallbackQueryHandler(handle_callback))
 
-  print("🚀 Бот успешно запущен!")
+  print("🚀 Бот успешно запущен через ScraperAPI!")
   app.run_polling()
 
 
