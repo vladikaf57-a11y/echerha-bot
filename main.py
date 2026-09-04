@@ -7,7 +7,6 @@ import os
 import re
 import threading
 from zoneinfo import ZoneInfo
-import cloudscraper
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -43,14 +42,16 @@ logging.basicConfig(
 )
 
 TOKEN = os.environ.get("BOT_TOKEN")
+# Вшитый ключ ScraperAPI для пробития Cloudflare
+SCRAPER_API_KEY = os.environ.get(
+    "SCRAPER_API_KEY", "efd2da31c1fb502728ca866fdd35a3d5"
+)
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
-    "https://back.echerha.gov.ua/api/v4/workload/1",
-    "https://back.echerha.gov.ua/api/v4/workload/2",
-    "https://back.echerha.gov.ua/api/v4/workload/3",
     "https://echerha.gov.ua/api/v4/workload/1",
     "https://echerha.gov.ua/api/v4/workload/2",
+    "https://echerha.gov.ua/api/v4/workload/3",
 ]
 
 DAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
@@ -292,42 +293,22 @@ def parse_queue_items(data_obj):
 
 
 def fetch_live_echerha_queues():
-  scraper = cloudscraper.create_scraper(
-      browser={"browser": "chrome", "platform": "windows", "desktop": True}
-  )
-
-  headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-          " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-      ),
-      "Accept": "application/json, text/plain, */*",
-      "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-      "Referer": "https://echerha.gov.ua/",
-  }
-
   flattened_queues = []
 
   for base_url in WORKLOAD_API_URLS:
-    urls_to_try = [
-        base_url,
-        f"https://api.allorigins.win/raw?url={base_url}",
-        f"https://api.codetabs.com/v1/proxy?quest={base_url}",
-    ]
+    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={base_url}"
 
-    for req_url in urls_to_try:
-      try:
-        res = scraper.get(req_url, headers=headers, timeout=5)
-        if res.status_code == 200 and res.text.strip():
-          text = res.text.strip()
-          if text.startswith(("[", "{")):
-            parsed_json = json.loads(text)
-            extracted = parse_queue_items(parsed_json)
-            if extracted:
-              flattened_queues.extend(extracted)
-              break
-      except Exception as e:
-        logging.error(f"Ошибка получения {req_url}: {e}")
+    try:
+      res = requests.get(req_url, timeout=20)
+      if res.status_code == 200 and res.text.strip():
+        text = res.text.strip()
+        if text.startswith(("[", "{")):
+          parsed_json = json.loads(text)
+          extracted = parse_queue_items(parsed_json)
+          if extracted:
+            flattened_queues.extend(extracted)
+    except Exception as e:
+      logging.error(f"Ошибка запроса {base_url}: {e}")
 
   return flattened_queues
 
