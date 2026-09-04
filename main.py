@@ -1,9 +1,12 @@
 import asyncio
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import logging
 import os
 import re
+import threading
+from zoneinfo import ZoneInfo
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -12,11 +15,12 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import os
-import threading
+
+# Часовой пояс
+TZ = ZoneInfo("Europe/Warsaw")
 
 
+# Микро-сервер для Render.com
 class HealthCheckHandler(BaseHTTPRequestHandler):
 
   def do_GET(self):
@@ -32,14 +36,14 @@ def run_health_server():
 
 
 threading.Thread(target=run_health_server, daemon=True).start()
+
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-# ⚠️ ВСТАВЬТЕ СЮДА ВАШ СВЕЖИЙ И ДЕЙСТВУЮЩИЙ ТОКЕН ИЗ BOTFATHER
-TOKEN = "8982444944:AAFznR-8oCVMkMsMrlFu1FTm7FiEt4KO8Do"
-
+TOKEN = "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
 TASKS_FILE = "tasks.json"
+
 WORKLOAD_API_URLS = [
     "https://echerha.gov.ua/api/v4/workload/1",
     "https://echerha.gov.ua/api/v4/workload/2",
@@ -47,7 +51,6 @@ WORKLOAD_API_URLS = [
 ]
 DAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
-# 🚛 ФИЛЬТРОВАННЫЙ СПИСОК: ТОЛЬКО ГРУЗОВЫЕ (≥ 7,5 т) И ПУСТЫЕ (≥ 7,5 т)
 CHECKPOINTS = {
     "PL": {
         "flag": "🇵🇱",
@@ -151,28 +154,31 @@ user_wizard = {}
 
 
 def parse_wait_time_to_datetime(wait_str):
-  now = datetime.now()
   if not wait_str or "0 хв" in wait_str or "без черги" in wait_str.lower():
-    dt = now
-  else:
-    days, hours, minutes = 0, 0, 0
-    d_m = re.search(r"(\d+)\s*(?:дн|день|дня|днів|дні)", wait_str, re.I)
-    h_m = re.search(
-        r"(\d+)\s*(?:год|годин|години|годину|час|часа|часов)", wait_str, re.I
-    )
-    m_m = re.search(
-        r"(\d+)\s*(?:хв|хвилин|хвилини|хвилину|мин|минут)", wait_str, re.I
-    )
+    return "🟢 Без очереди"
 
-    if d_m:
-      days = int(d_m.group(1))
-    if h_m:
-      hours = int(h_m.group(1))
-    if m_m:
-      minutes = int(m_m.group(1))
+  now = datetime.now(TZ)
+  days, hours, minutes = 0, 0, 0
 
-    dt = now + timedelta(days=days, hours=hours, minutes=minutes)
+  d_m = re.search(r"(\d+)\s*(?:дн|доб|день|дня|днів|дні)", wait_str, re.I)
+  h_m = re.search(
+      r"(\d+)\s*(?:год|годин|години|годину|час|часа|часов)", wait_str, re.I
+  )
+  m_m = re.search(
+      r"(\d+)\s*(?:хв|хвилин|хвилини|хвилину|мин|минут)", wait_str, re.I
+  )
 
+  if d_m:
+    days = int(d_m.group(1))
+  if h_m:
+    hours = int(h_m.group(1))
+  if m_m:
+    minutes = int(m_m.group(1))
+
+  if days == 0 and hours == 0 and minutes == 0:
+    return "🟢 Без очереди"
+
+  dt = now + timedelta(days=days, hours=hours, minutes=minutes)
   dow = DAYS_RU[dt.weekday()]
   return dt.strftime(f"%d.%m ({dow}) %H:%M")
 
@@ -185,7 +191,6 @@ def fetch_live_echerha_data():
       "Accept": "application/json, text/plain, */*",
   }
   raw_data = []
-
   for url in WORKLOAD_API_URLS:
     try:
       res = requests.get(url, headers=headers, timeout=8)
@@ -197,7 +202,6 @@ def fetch_live_echerha_data():
           raw_data.extend(data["data"])
     except Exception as e:
       logging.error(f"Ошибка получения API {url}: {e}")
-
   return raw_data
 
 
@@ -208,13 +212,19 @@ def fetch_country_queue_report(country_code):
   items = country_info.get("items", [])
 
   api_data = fetch_live_echerha_data()
-  output_lines = [f"📊 **Текущая очередь: {flag} {country_name} (≥ 7,5 т)**\n"]
+  output_lines = [
+      f"📊 **Ориентировочное время въезда (последняя машина): {flag}"
+      f" {country_name}**\n"
+  ]
 
   for item_title, keywords, special_type in items:
     found_wait_time = None
-
     for entry in api_data:
-      name = str(entry.get("name", "") or entry.get("title", "")).lower()
+      name = str(
+          entry.get("name", "")
+          or entry.get("title", "")
+          or entry.get("checkpoint_name", "")
+      ).lower()
       wait_time = str(
           entry.get("waiting_time", "")
           or entry.get("wait_time", "")
@@ -236,14 +246,14 @@ def fetch_country_queue_report(country_code):
           found_wait_time = wait_time
           break
 
-    if found_wait_time:
+    if found_wait_time is not None:
       formatted_dt = parse_wait_time_to_datetime(found_wait_time)
     else:
-      formatted_dt = parse_wait_time_to_datetime("2 часа 15 минут")
+      formatted_dt = "⚠️ Нет данных"
 
     output_lines.append(f"📍 **{item_title}**\n🚚 {formatted_dt}\n")
 
-  now = datetime.now()
+  now = datetime.now(TZ)
   dow = DAYS_RU[now.weekday()]
   output_lines.append(f"🕒 _Обновлено: {now.strftime(f'%d.%m ({dow}) %H:%M')}_")
   return "\n".join(output_lines)
@@ -301,7 +311,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")]
     )
     await query.message.edit_text(
-        "🌍 **Выберите страну (Грузовые ≥ 7,5 т):**",
+        "🌍 **Выберите страну:**",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown",
     )
@@ -309,7 +319,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
   elif data.startswith("status_show_"):
     cntry_code = data.split("_")[2]
     await query.message.edit_text(
-        "⏳ *Загружаю данные по грузовым переходам...*", parse_mode="Markdown"
+        "⏳ *Загружаю текущие данные єЧерга...*", parse_mode="Markdown"
     )
 
     report_text = fetch_country_queue_report(cntry_code)
@@ -431,22 +441,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_wizard[chat_id]["checkpoint"] = chk_name
 
-    today = datetime.now()
+    today = datetime.now(TZ)
     days_map = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     buttons = []
 
     for i in range(7):
       d = today + timedelta(days=i)
-      date_str = d.strftime("%d.%m")
+      date_str = d.strftime("%d.%m.%Y")
       day_name = days_map[d.weekday()]
       label = (
-          f"📅 Сегодня ({date_str})" if i == 0 else f"📅 {date_str} ({day_name})"
+          f"📅 Сегодня ({d.strftime('%d.%m')})"
+          if i == 0
+          else f"📅 {d.strftime('%d.%m')} ({day_name})"
       )
-      buttons.append([
-          InlineKeyboardButton(
-              label, callback_data=f"wiz_date_{d.strftime('%d.%m.%Y')}"
-          )
-      ])
+      buttons.append(
+          [InlineKeyboardButton(label, callback_data=f"wiz_date_{date_str}")]
+      )
 
     buttons.append([
         InlineKeyboardButton(
@@ -464,25 +474,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_val = data.split("_")[2]
     user_wizard[chat_id]["date"] = date_val
 
-    hours = [
-        "01:00",
-        "03:00",
-        "05:00",
-        "07:00",
-        "09:00",
-        "11:00",
-        "13:00",
-        "15:00",
-        "17:00",
-        "19:00",
-        "21:00",
-        "23:00",
-    ]
+    time_options = []
+    for h in range(24):
+      for m in (0, 30):
+        time_options.append(f"{h:02d}:{m:02d}")
+
     buttons = []
     row = []
-    for h in hours:
-      row.append(InlineKeyboardButton(f"⏰ {h}", callback_data=f"wiz_time_{h}"))
-      if len(row) == 3:
+    for t in time_options:
+      row.append(InlineKeyboardButton(t, callback_data=f"wiz_time_{t}"))
+      if len(row) == 4:
         buttons.append(row)
         row = []
     if row:
@@ -493,7 +494,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await query.message.edit_text(
-        f"⏰ **Шаг 4 из 4:** Выберите время на **{date_val}**:",
+        f"⏰ **Шаг 4 из 4:** Выберите точное время на **{date_val}**:",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown",
     )
@@ -506,7 +507,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "checkpoint": wiz.get("checkpoint", "КПП"),
         "target_date": wiz.get("date", ""),
         "target_time": time_val,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "created_at": datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),
     }
 
     tasks = load_tasks()
@@ -515,7 +516,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tasks[chat_id].append(new_task)
     save_tasks(tasks)
 
-    del user_wizard[chat_id]
+    if chat_id in user_wizard:
+      del user_wizard[chat_id]
 
     await query.message.edit_text(
         f"✅ **Отслеживание установлено!**\n\n"
@@ -535,12 +537,16 @@ async def queue_checker_loop(app: Application):
     try:
       tasks = load_tasks()
       if tasks:
-        now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+        now_dt = datetime.now(TZ)
         for chat_id, user_tasks in list(tasks.items()):
           for task in list(user_tasks):
-            target_dt = f"{task['target_date']} {task['target_time']}"
-            if now_str >= target_dt:
-              try:
+            try:
+              target_dt = datetime.strptime(
+                  f"{task['target_date']} {task['target_time']}",
+                  "%d.%m.%Y %H:%M",
+              ).replace(tzinfo=TZ)
+
+              if now_dt >= target_dt:
                 await app.bot.send_message(
                     chat_id=int(chat_id),
                     text=(
@@ -554,12 +560,12 @@ async def queue_checker_loop(app: Application):
                 )
                 user_tasks.remove(task)
                 save_tasks(tasks)
-              except Exception as err:
-                logging.error(f"Ошибка отправки: {err}")
+            except Exception as task_err:
+              logging.error(f"Ошибка проверки задачи: {task_err}")
     except Exception as e:
       logging.error(f"Ошибка фоновой проверки: {e}")
 
-    await asyncio.sleep(180)
+    await asyncio.sleep(30)
 
 
 async def post_init(app: Application):
@@ -571,7 +577,7 @@ def main():
   app.add_handler(CommandHandler("start", start))
   app.add_handler(CallbackQueryHandler(handle_callback))
 
-  print("🚀 Бот обновлен: строго грузовой транспорт ≥ 7,5 т!")
+  print("🚀 Бот запущен с точным расчетом и фоновой проверкой каждые 30 сек.")
   app.run_polling()
 
 
