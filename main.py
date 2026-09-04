@@ -17,14 +17,10 @@ from telegram.ext import (
 )
 import urllib3
 
-# Отключаем предупреждения об SSL-сертификатах для сервиса єЧерга
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Настройка часового пояса
 TZ = ZoneInfo("Europe/Warsaw")
 
 
-# Микро-сервер для поддержания работы на Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
 
   def do_GET(self):
@@ -40,12 +36,15 @@ def run_health_server():
 
 
 threading.Thread(target=run_health_server, daemon=True).start()
-TOKEN = os.environ.get("8982444944:AAFznR-8oCVMkMsMrlFu1FTm7FiEt4KO8Do")
+
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = "8982444944:AAFznR-8oCVMkMsMrlFu1FTm7FiEt4KO8Do"
+# Токен берется из настроек Environment (или используется запасной)
+TOKEN = os.environ.get(
+    "BOT_TOKEN", "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
+)
 TASKS_FILE = "tasks.json"
 
 WORKLOAD_API_URLS = [
@@ -157,29 +156,23 @@ def save_tasks(tasks):
 user_wizard = {}
 
 
-def parse_wait_time_to_datetime(wait_str):
+def get_estimated_entry_datetime(wait_str):
+  """Возвращает точный datetime въезда ПОСЛЕДНЕЙ машины в очереди."""
   if (
       not wait_str
       or str(wait_str).lower() in ["none", "null", ""]
       or "без черги" in str(wait_str).lower()
   ):
-    return "🟢 Без очереди"
+    return datetime.now(TZ)
 
   wait_str = str(wait_str).strip()
+  now = datetime.now(TZ)
 
   if wait_str.isdigit():
     sec = int(wait_str)
-    if sec == 0:
-      return "🟢 Без очереди"
-    if sec < 1000000:
-      now = datetime.now(TZ)
-      dt = now + timedelta(seconds=sec)
-      dow = DAYS_RU[dt.weekday()]
-      return dt.strftime(f"%d.%m ({dow}) %H:%M")
+    return now + timedelta(seconds=sec)
 
-  now = datetime.now(TZ)
   days, hours, minutes = 0, 0, 0
-
   d_m = re.search(
       r"(\d+)\s*(?:дн|доб|день|дня|днів|дні|day|days)", wait_str, re.I
   )
@@ -201,28 +194,17 @@ def parse_wait_time_to_datetime(wait_str):
   if m_m:
     minutes = int(m_m.group(1))
 
-  if days == 0 and hours == 0 and minutes == 0:
-    if "0 хв" in wait_str or "0 min" in wait_str or wait_str == "0":
-      return "🟢 Без очереди"
-    return f"⏱ {wait_str}"
-
-  dt = now + timedelta(days=days, hours=hours, minutes=minutes)
-  dow = DAYS_RU[dt.weekday()]
-  return dt.strftime(f"%d.%m ({dow}) %H:%M")
+  return now + timedelta(days=days, hours=hours, minutes=minutes)
 
 
 def fetch_live_echerha_queues():
   headers = {
       "User-Agent": (
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-          " (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
       ),
       "Accept": "application/json, text/plain, */*",
-      "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
       "Referer": "https://echerha.gov.ua/workload",
-      "Origin": "https://echerha.gov.ua",
   }
-
   flattened_queues = []
   session = requests.Session()
 
@@ -276,12 +258,8 @@ def fetch_live_echerha_queues():
                   "full_name": chk_name,
                   "waiting_time": str(w_time) if w_time is not None else "",
               })
-      else:
-        logging.warning(
-            f"API {url} вернул статус {res.status_code}: {res.text[:100]}"
-        )
     except Exception as e:
-      logging.error(f"Ошибка обращения к API {url}: {e}")
+      logging.error(f"Ошибка API {url}: {e}")
 
   return flattened_queues
 
@@ -327,7 +305,9 @@ def fetch_country_queue_report(country_code):
           break
 
     if found_wait_time is not None and found_wait_time != "":
-      formatted_dt = parse_wait_time_to_datetime(found_wait_time)
+      dt = get_estimated_entry_datetime(found_wait_time)
+      dow = DAYS_RU[dt.weekday()]
+      formatted_dt = dt.strftime(f"%d.%m ({dow}) %H:%M")
     else:
       formatted_dt = "⚠️ Нет данных"
 
@@ -517,9 +497,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = data.split("_")
     cntry_code = parts[2]
     chk_idx = int(parts[3])
-    chk_name = CHECKPOINTS[cntry_code]["items"][chk_idx][0]
+    chk_item = CHECKPOINTS[cntry_code]["items"][chk_idx]
 
-    user_wizard[chat_id]["checkpoint"] = chk_name
+    user_wizard[chat_id]["checkpoint"] = chk_item[0]
+    user_wizard[chat_id]["keywords"] = chk_item[1]
+    user_wizard[chat_id]["special_type"] = chk_item[2]
 
     today = datetime.now(TZ)
     days_map = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -545,7 +527,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
 
     await query.message.edit_text(
-        f"📅 **Шаг 3 из 4:** Выберите дату для **{chk_name}**:",
+        f"📅 **Шаг 3 из 4:** Выберите дату для **{chk_item[0]}**:",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown",
     )
@@ -574,7 +556,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await query.message.edit_text(
-        f"⏰ **Шаг 4 из 4:** Выберите точное время на **{date_val}**:",
+        f"⏰ **Шаг 4 из 4:** Выберите целевое время въезда на **{date_val}**:",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown",
     )
@@ -585,6 +567,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     new_task = {
         "checkpoint": wiz.get("checkpoint", "КПП"),
+        "keywords": wiz.get("keywords", []),
+        "special_type": wiz.get("special_type", False),
         "target_date": wiz.get("date", ""),
         "target_time": time_val,
         "created_at": datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),
@@ -602,8 +586,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text(
         f"✅ **Отслеживание установлено!**\n\n"
         f"📍 **Пункт:** {new_task['checkpoint']}\n"
-        f"📅 **Целевое время:** `{new_task['target_date']} в {new_task['target_time']}`\n\n"
-        f"🔔 Бот автоматически уведомит вас в этом чате!",
+        f"🎯 **Желаемый въезд:** `{new_task['target_date']} в {new_task['target_time']}`\n\n"
+        f"🔔 Бот непрерывно следит за последней машиной и пришлёт уведомление, как только очередь дойдёт до этого времени!",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("📋 Мои задачи", callback_data="show_tasks"),
             InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main"),
@@ -628,35 +612,77 @@ def parse_target_datetime(date_str, time_str):
 
 
 async def queue_checker_loop(app: Application):
+  """Фоновая проверка: срабатывает, когда ПОСЛЕДНЯЯ МАШИНА заезжает >= целевого времени."""
   while True:
     try:
       tasks = load_tasks()
       if tasks:
-        now_dt = datetime.now(TZ)
+        all_queues = fetch_live_echerha_queues()
+
         for chat_id, user_tasks in list(tasks.items()):
           for task in list(user_tasks):
             target_dt = parse_target_datetime(
                 task.get("target_date", ""), task.get("target_time", "")
             )
-            if target_dt and now_dt >= target_dt:
-              try:
+            if not target_dt:
+              continue
+
+            keywords = task.get("keywords", [])
+            special_type = task.get("special_type", False)
+
+            # Ищем актуальное время ожидания для этого КПП
+            found_wait_time = None
+            for entry in all_queues:
+              full_name = entry["full_name"]
+              if keywords and any(k in full_name for k in keywords):
+                if special_type is True and (
+                    "1-24" in full_name or "уктзед" in full_name
+                ):
+                  found_wait_time = entry["waiting_time"]
+                  break
+                elif special_type == "порожн" and (
+                    "порожн" in full_name
+                    or "пуст" in full_name
+                    or "empty" in full_name
+                ):
+                  found_wait_time = entry["waiting_time"]
+                  break
+                elif special_type is False and not (
+                    "1-24" in full_name
+                    or "порожн" in full_name
+                    or "пуст" in full_name
+                    or "уктзед" in full_name
+                ):
+                  found_wait_time = entry["waiting_time"]
+                  break
+
+            if found_wait_time is not None and found_wait_time != "":
+              last_truck_entry_dt = get_estimated_entry_datetime(
+                  found_wait_time
+              )
+
+              # ГЛАВНОЕ УСЛОВИЕ: Время въезда последней машины ДОСТИГЛО или ПЕРЕШАГНУЛО целевое время
+              if last_truck_entry_dt >= target_dt:
+                dow = DAYS_RU[last_truck_entry_dt.weekday()]
+                actual_str = last_truck_entry_dt.strftime(
+                    f"%d.%m ({dow}) %H:%M"
+                )
+
                 await app.bot.send_message(
                     chat_id=int(chat_id),
                     text=(
                         f"🚨 **ПОРА СТАВИТЬ МАШИНУ В ОЧЕРЕДЬ!**\n\n"
-                        f"📍 КПП: **{task['checkpoint']}**\n"
-                        f"⏰ Ваше время: `{task['target_date']}"
-                        f" {task['target_time']}`\n\n"
-                        f"👉 Зайдите на сайт єЧерга и зарегистрируйтесь!"
+                        f"📍 **КПП:** {task['checkpoint']}\n"
+                        f"🎯 **Ваша цель:** `{task['target_date']} в {task['target_time']}`\n"
+                        f"🚚 **Очередь дошла до:** `{actual_str}`\n\n"
+                        f"👉 Регистрируйтесь прямо сейчас, чтобы получить въезд в районе вашего времени!"
                     ),
                     parse_mode="Markdown",
                 )
                 user_tasks.remove(task)
                 save_tasks(tasks)
-              except Exception as err:
-                logging.error(f"Ошибка отправки уведомления: {err}")
     except Exception as e:
-      logging.error(f"Ошибка проверки задач: {e}")
+      logging.error(f"Ошибка проверки алгоритма: {e}")
 
     await asyncio.sleep(30)
 
@@ -670,7 +696,7 @@ def main():
   app.add_handler(CommandHandler("start", start))
   app.add_handler(CallbackQueryHandler(handle_callback))
 
-  print("🚀 Бот запущен с полным разбором API!")
+  print("🚀 Бот запущен с алгоритмом отслеживания последней машины в очереди!")
   app.run_polling()
 
 
