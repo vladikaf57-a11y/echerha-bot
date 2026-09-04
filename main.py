@@ -7,6 +7,7 @@ import os
 import re
 import threading
 from zoneinfo import ZoneInfo
+import cloudscraper
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -41,7 +42,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-# Токен берется из настроек Environment (или используется запасной)
 TOKEN = os.environ.get(
     "BOT_TOKEN", "8982444944:AAFZnR-8oCVMkMsMr1Fu1FTm7FiEt4KO8Do"
 )
@@ -156,8 +156,30 @@ def save_tasks(tasks):
 user_wizard = {}
 
 
+def format_time_diff(target_dt):
+  """Вычисляет и красиво форматирует оставшееся время от с момента СЕЙЧАС (дни и часы)."""
+  now = datetime.now(TZ)
+  diff = target_dt - now
+  if diff.total_seconds() <= 0:
+    return "прямо сейчас"
+
+  total_minutes = int(diff.total_seconds() // 60)
+  days = total_minutes // (24 * 60)
+  hours = (total_minutes % (24 * 60)) // 60
+  minutes = total_minutes % 60
+
+  if days > 0 and hours > 0:
+    return f"через {days} дн. {hours} ч."
+  elif days > 0:
+    return f"через {days} дн."
+  elif hours > 0:
+    return f"через {hours} ч."
+  else:
+    return f"через {minutes} мин."
+
+
 def get_estimated_entry_datetime(wait_str):
-  """Возвращает точный datetime въезда ПОСЛЕДНЕЙ машины в очереди."""
+  """Рассчитывает дату и время въезда ПОСЛЕДНЕЙ машины в очереди."""
   if (
       not wait_str
       or str(wait_str).lower() in ["none", "null", ""]
@@ -198,73 +220,80 @@ def get_estimated_entry_datetime(wait_str):
 
 
 def fetch_live_echerha_queues():
-  headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-      ),
-      "Accept": "application/json, text/plain, */*",
-      "Referer": "https://echerha.gov.ua/workload",
-  }
+  """Запрашивает данные єЧерга с обходом защиты Cloudflare на Render."""
+  scraper = cloudscraper.create_scraper(
+      browser={"browser": "chrome", "platform": "windows", "desktop": True}
+  )
   flattened_queues = []
-  session = requests.Session()
 
-  for url in WORKLOAD_API_URLS:
-    try:
-      res = session.get(url, headers=headers, timeout=12, verify=False)
-      if res.status_code == 200:
-        data = res.json()
-        items = data if isinstance(data, list) else data.get("data", [data])
-        for item in items:
-          if isinstance(item, dict):
-            chk_name = str(
-                item.get("name")
-                or item.get("title")
-                or item.get("checkpoint_name")
-                or ""
-            ).lower()
-            queues = (
-                item.get("queues")
-                or item.get("items")
-                or item.get("checkpoints")
-                or []
-            )
+  for base_url in WORKLOAD_API_URLS:
+    urls_to_try = [
+        base_url,
+        f"https://corsproxy.io/?{base_url}",
+        f"https://api.allorigins.win/raw?url={base_url}",
+    ]
+    data = None
+    for req_url in urls_to_try:
+      try:
+        res = scraper.get(req_url, timeout=12, verify=False)
+        if res.status_code == 200 and res.text.strip().startswith(("[", "{")):
+          data = res.json()
+          break
+      except Exception as e:
+        logging.error(f"Ошибка получения {req_url}: {e}")
 
-            if isinstance(queues, list) and len(queues) > 0:
-              for q in queues:
-                if isinstance(q, dict):
-                  q_name = str(q.get("name") or q.get("title") or "").lower()
-                  full_name = f"{chk_name} {q_name}"
-                  w_time = (
-                      q.get("waiting_time")
-                      or q.get("wait_time")
-                      or q.get("delay_time")
-                      or q.get("estimated_waiting_time")
-                      or q.get("wait")
-                  )
-                  flattened_queues.append({
-                      "full_name": full_name,
-                      "waiting_time": (
-                          str(w_time) if w_time is not None else ""
-                      ),
-                  })
-            else:
+    if not data:
+      continue
+
+    items = data if isinstance(data, list) else data.get("data", [data])
+    for item in items:
+      if isinstance(item, dict):
+        chk_name = str(
+            item.get("name")
+            or item.get("title")
+            or item.get("checkpoint_name")
+            or ""
+        ).lower()
+        queues = (
+            item.get("queues")
+            or item.get("items")
+            or item.get("checkpoints")
+            or []
+        )
+
+        if isinstance(queues, list) and len(queues) > 0:
+          for q in queues:
+            if isinstance(q, dict):
+              q_name = str(q.get("name") or q.get("title") or "").lower()
+              full_name = f"{chk_name} {q_name}"
               w_time = (
-                  item.get("waiting_time")
-                  or item.get("wait_time")
-                  or item.get("delay_time")
-                  or item.get("estimated_waiting_time")
+                  q.get("waiting_time")
+                  or q.get("wait_time")
+                  or q.get("delay_time")
+                  or q.get("estimated_waiting_time")
+                  or q.get("wait")
               )
               flattened_queues.append({
-                  "full_name": chk_name,
+                  "full_name": full_name,
                   "waiting_time": str(w_time) if w_time is not None else "",
               })
-    except Exception as e:
-      logging.error(f"Ошибка API {url}: {e}")
+        else:
+          w_time = (
+              item.get("waiting_time")
+              or item.get("wait_time")
+              or item.get("delay_time")
+              or item.get("estimated_waiting_time")
+          )
+          flattened_queues.append({
+              "full_name": chk_name,
+              "waiting_time": str(w_time) if w_time is not None else "",
+          })
 
   return flattened_queues
 
 
 def fetch_country_queue_report(country_code):
+  """Формирует отчёт '📊 Очередь сейчас' с датой въезда и временем от сегодняшнего дня."""
   country_info = CHECKPOINTS.get(country_code, {})
   country_name = country_info.get("name", "Граница")
   flag = country_info.get("flag", "📍")
@@ -272,7 +301,7 @@ def fetch_country_queue_report(country_code):
 
   all_queues = fetch_live_echerha_queues()
   output_lines = [
-      f"📊 **Ориентировочное время въезда (последняя машина): {flag}"
+      f"📊 **Время въезда последней машины в очереди: {flag}"
       f" {country_name}**\n"
   ]
 
@@ -307,11 +336,12 @@ def fetch_country_queue_report(country_code):
     if found_wait_time is not None and found_wait_time != "":
       dt = get_estimated_entry_datetime(found_wait_time)
       dow = DAYS_RU[dt.weekday()]
-      formatted_dt = dt.strftime(f"%d.%m ({dow}) %H:%M")
+      time_left = format_time_diff(dt)
+      formatted_dt = f"{dt.strftime(f'%d.%m ({dow}) %H:%M')} ({time_left})"
     else:
       formatted_dt = "⚠️ Нет данных"
 
-    output_lines.append(f"📍 **{item_title}**\n🚚 {formatted_dt}\n")
+    output_lines.append(f"📍 **{item_title}**\n🚚 Последняя машина: {formatted_dt}\n")
 
   now = datetime.now(TZ)
   dow = DAYS_RU[now.weekday()]
@@ -612,7 +642,7 @@ def parse_target_datetime(date_str, time_str):
 
 
 async def queue_checker_loop(app: Application):
-  """Фоновая проверка: срабатывает, когда ПОСЛЕДНЯЯ МАШИНА заезжает >= целевого времени."""
+  """Проверяет время въезда ПОСЛЕДНЕЙ машины. Если оно >= целевого, слать пуш."""
   while True:
     try:
       tasks = load_tasks()
@@ -630,7 +660,6 @@ async def queue_checker_loop(app: Application):
             keywords = task.get("keywords", [])
             special_type = task.get("special_type", False)
 
-            # Ищем актуальное время ожидания для этого КПП
             found_wait_time = None
             for entry in all_queues:
               full_name = entry["full_name"]
@@ -661,12 +690,10 @@ async def queue_checker_loop(app: Application):
                   found_wait_time
               )
 
-              # ГЛАВНОЕ УСЛОВИЕ: Время въезда последней машины ДОСТИГЛО или ПЕРЕШАГНУЛО целевое время
               if last_truck_entry_dt >= target_dt:
                 dow = DAYS_RU[last_truck_entry_dt.weekday()]
-                actual_str = last_truck_entry_dt.strftime(
-                    f"%d.%m ({dow}) %H:%M"
-                )
+                time_left = format_time_diff(last_truck_entry_dt)
+                actual_str = f"{last_truck_entry_dt.strftime(f'%d.%m ({dow}) %H:%M')} ({time_left})"
 
                 await app.bot.send_message(
                     chat_id=int(chat_id),
@@ -674,8 +701,8 @@ async def queue_checker_loop(app: Application):
                         f"🚨 **ПОРА СТАВИТЬ МАШИНУ В ОЧЕРЕДЬ!**\n\n"
                         f"📍 **КПП:** {task['checkpoint']}\n"
                         f"🎯 **Ваша цель:** `{task['target_date']} в {task['target_time']}`\n"
-                        f"🚚 **Очередь дошла до:** `{actual_str}`\n\n"
-                        f"👉 Регистрируйтесь прямо сейчас, чтобы получить въезд в районе вашего времени!"
+                        f"🚚 **Очередь (последняя машина) уже на:** `{actual_str}`\n\n"
+                        f"👉 Регистрируйтесь прямо сейчас!"
                     ),
                     parse_mode="Markdown",
                 )
@@ -696,7 +723,7 @@ def main():
   app.add_handler(CommandHandler("start", start))
   app.add_handler(CallbackQueryHandler(handle_callback))
 
-  print("🚀 Бот запущен с алгоритмом отслеживания последней машины в очереди!")
+  print("🚀 Бот запущен с расчетом дней/часов от сегодняшнего дня!")
   app.run_polling()
 
 
