@@ -300,15 +300,32 @@ def fetch_live_echerha_queues():
   }
 
   for base_url in WORKLOAD_API_URLS:
-    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={base_url}"
+    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&render=true&url={base_url}"
     try:
       res = requests.get(req_url, headers=headers, timeout=30)
       text = res.text.strip() if res.text else ""
-      if res.status_code == 200 and text.startswith(("[", "{")):
-        parsed_json = json.loads(text)
+
+      parsed_json = None
+      if text.startswith(("[", "{")):
+        try:
+          parsed_json = json.loads(text)
+        except Exception:
+          pass
+
+      if not parsed_json:
+        match = re.search(r'([\[\{].*[\}\]])', text, re.DOTALL)
+        if match:
+          try:
+            parsed_json = json.loads(match.group(1))
+          except Exception:
+            pass
+
+      if parsed_json:
         extracted = parse_queue_items(parsed_json)
         if extracted:
           flattened_queues.extend(extracted)
+      else:
+        logging.warning(f"Не удалось извлечь JSON от {base_url}")
     except Exception as e:
       logging.error(f"Ошибка запроса {base_url}: {e}")
 
