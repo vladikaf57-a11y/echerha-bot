@@ -300,7 +300,7 @@ def fetch_live_echerha_queues():
   }
 
   for base_url in WORKLOAD_API_URLS:
-    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&render=true&url={base_url}"
+    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&antibot=true&url={base_url}"
     try:
       res = requests.get(req_url, headers=headers, timeout=30)
       text = res.text.strip() if res.text else ""
