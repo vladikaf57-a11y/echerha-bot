@@ -178,14 +178,13 @@ def format_time_diff(target_dt):
   hours = (total_minutes % (24 * 60)) // 60
   minutes = total_minutes % 60
 
-  if days > 0 and hours > 0:
-    return f"через {days} дн. {hours} ч."
-  elif days > 0:
-    return f"через {days} дн."
-  elif hours > 0:
-    return f"через {hours} ч."
-  else:
-    return f"через {minutes} мин."
+  parts = []
+  if days > 0:
+    parts.append(f"{days} дн.")
+  if hours > 0 or days > 0:
+    parts.append(f"{hours} ч.")
+  parts.append(f"{minutes} мин.")
+  return "через " + " ".join(parts)
 
 
 def get_estimated_entry_datetime(wait_str):
@@ -194,7 +193,7 @@ def get_estimated_entry_datetime(wait_str):
       or str(wait_str).lower() in ["none", "null", ""]
       or "без черги" in str(wait_str).lower()
   ):
-    return datetime.now(TZ)
+    return None
 
   wait_str = str(wait_str).strip()
   now = datetime.now(TZ)
@@ -224,6 +223,9 @@ def get_estimated_entry_datetime(wait_str):
     hours = int(h_m.group(1))
   if m_m:
     minutes = int(m_m.group(1))
+
+  if days == 0 and hours == 0 and minutes == 0:
+    return None
 
   return now + timedelta(days=days, hours=hours, minutes=minutes)
 
@@ -291,7 +293,6 @@ def parse_queue_items(data_obj):
 
 def fetch_live_echerha_queues():
   flattened_queues = []
-
   headers = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
       "Accept": "application/json, text/plain, */*",
@@ -300,18 +301,14 @@ def fetch_live_echerha_queues():
 
   for base_url in WORKLOAD_API_URLS:
     req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={base_url}"
-
     try:
       res = requests.get(req_url, headers=headers, timeout=30)
       text = res.text.strip() if res.text else ""
-
       if res.status_code == 200 and text.startswith(("[", "{")):
         parsed_json = json.loads(text)
         extracted = parse_queue_items(parsed_json)
         if extracted:
           flattened_queues.extend(extracted)
-      else:
-        logging.warning(f"Ответ от {base_url}: код {res.status_code}, текст: {text[:150]}")
     except Exception as e:
       logging.error(f"Ошибка запроса {base_url}: {e}")
 
@@ -326,8 +323,7 @@ def fetch_country_queue_report(country_code):
 
   all_queues = fetch_live_echerha_queues()
   output_lines = [
-      f"📊 **Время въезда последней машины в очереди: {flag}"
-      f" {country_name}**\n"
+      f"📊 **Фактическое время въезда последней машины: {flag} {country_name}**\n"
   ]
 
   for item_title, keywords, special_type in items:
@@ -358,8 +354,8 @@ def fetch_country_queue_report(country_code):
           found_wait_time = wait_time
           break
 
-    if found_wait_time is not None and found_wait_time != "":
-      dt = get_estimated_entry_datetime(found_wait_time)
+    dt = get_estimated_entry_datetime(found_wait_time)
+    if dt:
       dow = DAYS_RU[dt.weekday()]
       time_left = format_time_diff(dt)
       formatted_dt = f"{dt.strftime(f'%d.%m ({dow}) %H:%M')} ({time_left})"
@@ -720,7 +716,7 @@ async def queue_checker_loop(app: Application):
                   found_wait_time
               )
 
-              if last_truck_entry_dt >= target_dt:
+              if last_truck_entry_dt and last_truck_entry_dt >= target_dt:
                 dow = DAYS_RU[last_truck_entry_dt.weekday()]
                 time_left = format_time_diff(last_truck_entry_dt)
                 actual_str = f"{last_truck_entry_dt.strftime(f'%d.%m ({dow}) %H:%M')} ({time_left})"
