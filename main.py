@@ -7,7 +7,7 @@ import os
 import re
 import threading
 from zoneinfo import ZoneInfo
-import requests
+requests = __import__('requests')
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -292,18 +292,32 @@ def parse_queue_items(data_obj):
 def fetch_live_echerha_queues():
   flattened_queues = []
 
+  headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+  }
+
   for base_url in WORKLOAD_API_URLS:
-    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={base_url}"
+    # Используем ScraperAPI с принудительным рендерингом/обходом TLS-отпечатков через параметры render=true
+    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&render=true&url={base_url}"
 
     try:
-      res = requests.get(req_url, timeout=20)
-      if res.status_code == 200 and res.text.strip():
-        text = res.text.strip()
-        if text.startswith(("[", "{")):
-          parsed_json = json.loads(text)
-          extracted = parse_queue_items(parsed_json)
-          if extracted:
-            flattened_queues.extend(extracted)
+      res = requests.get(req_url, headers=headers, timeout=30)
+      text = res.text.strip() if res.text else ""
+      
+      # Жесткая проверка: если Cloudflare подсунул HTML-заглушку вместо JSON
+      if "<html" in text.lower() or "cloudflare" in text.lower():
+        logging.error(f"Cloudflare заблокировал запрос к {base_url через прокси.")
+        continue
+
+      if res.status_code == 200 and text.startswith(("[", "{")):
+        parsed_json = json.loads(text)
+        extracted = parse_queue_items(parsed_json)
+        if extracted:
+          flattened_queues.extend(extracted)
+      else:
+        logging.warning(f"Некорректный ответ от {base_url}: код {res.status_code}, текст: {text[:150]}")
     except Exception as e:
       logging.error(f"Ошибка запроса {base_url}: {e}")
 
@@ -745,7 +759,7 @@ def main():
   app.add_handler(CommandHandler("start", start))
   app.add_handler(CallbackQueryHandler(handle_callback))
 
-  print("🚀 Бот успешно запущен через ScraperAPI!")
+  print("🚀 Бот успешно запущен!")
   app.run_polling()
 
 
