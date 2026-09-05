@@ -308,7 +308,7 @@ def fetch_live_echerha_queues():
       
       # Жесткая проверка: если Cloudflare подсунул HTML-заглушку вместо JSON
       if "<html" in text.lower() or "cloudflare" in text.lower():
-        logging.error(f"Cloudflare заблокировал запрос к {base_url через прокси.")
+        logging.error(f"Cloudflare заблокировал запрос к {base_url} через прокси.")
         continue
 
       if res.status_code == 200 and text.startswith(("[", "{")):
