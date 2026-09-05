@@ -299,17 +299,11 @@ def fetch_live_echerha_queues():
   }
 
   for base_url in WORKLOAD_API_URLS:
-    # Используем ScraperAPI с принудительным рендерингом/обходом TLS-отпечатков через параметры render=true
-    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&render=true&url={base_url}"
+    req_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={base_url}"
 
     try:
       res = requests.get(req_url, headers=headers, timeout=30)
       text = res.text.strip() if res.text else ""
-      
-      # Жесткая проверка: если Cloudflare подсунул HTML-заглушку вместо JSON
-      if "<html" in text.lower() or "cloudflare" in text.lower():
-        logging.error(f"Cloudflare заблокировал запрос к {base_url} через прокси.")
-        continue
 
       if res.status_code == 200 and text.startswith(("[", "{")):
         parsed_json = json.loads(text)
@@ -317,7 +311,7 @@ def fetch_live_echerha_queues():
         if extracted:
           flattened_queues.extend(extracted)
       else:
-        logging.warning(f"Некорректный ответ от {base_url}: код {res.status_code}, текст: {text[:150]}")
+        logging.warning(f"Ответ от {base_url}: код {res.status_code}, текст: {text[:150]}")
     except Exception as e:
       logging.error(f"Ошибка запроса {base_url}: {e}")
 
